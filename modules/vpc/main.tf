@@ -1,6 +1,6 @@
 resource "aws_vpc" "this" {
   cidr_block           = var.vpc_cidr
-  enable_dns_hostnames = true
+  enable_dns_hostnames = truef
   enable_dns_support   = true
 
   tags = merge(local.common_tags, {
@@ -143,7 +143,7 @@ resource "aws_route_table_association" "database" {
 
 resource "aws_vpc_endpoint" "s3" {
   vpc_id            = aws_vpc.this.id
-  service_name      = "com.amazonaws.${data.aws_region.current.name}.s3"
+  service_name      = "com.amazonaws.${data.aws_region.current.region}.s3"
   vpc_endpoint_type = "Gateway"
   route_table_ids   = concat(aws_route_table.private[*].id, aws_route_table.database[*].id)
 
