@@ -1,0 +1,4 @@
+aws_region        = "eu-west-1"
+state_bucket_name = "vouch-terraform-state"
+lock_table_name   = "vouch-terraform-locks"
+force_destroy     = false

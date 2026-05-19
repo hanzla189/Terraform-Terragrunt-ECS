@@ -1,0 +1,26 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+*.tfvars
+!*.tfvars.example
+*.tfplan
+.terraform.lock.hcl
+
+# Terragrunt
+.terragrunt-cache/
+backend.generated.tf
+providers.generated.tf
+
+# Local env/secrets
+.env
+*.pem
+*.key
+*.crt
+
+# OS/IDE
+.DS_Store
+.vscode/
+.idea/

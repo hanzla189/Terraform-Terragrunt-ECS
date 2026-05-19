@@ -1,0 +1,184 @@
+name: Terraform Day 2 - VPC Foundation
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "bootstrap/**"
+      - "modules/**"
+      - "envs/**"
+      - "terragrunt.hcl"
+      - ".github/workflows/terraform-day2.yml"
+  workflow_dispatch:
+    inputs:
+      component:
+        description: "Component to run"
+        type: choice
+        required: true
+        default: vpc
+        options:
+          - bootstrap
+          - vpc
+      environment:
+        description: "Environment for VPC component"
+        type: choice
+        required: true
+        default: dev
+        options:
+          - dev
+          - staging
+          - prod
+      action:
+        description: "Terraform action"
+        type: choice
+        required: true
+        default: plan
+        options:
+          - plan
+          - apply
+          - destroy
+      confirm_destroy:
+        description: "Required only for destroy. Type DESTROY."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: terraform-day2-${{ github.event_name == 'pull_request' && 'dev' || inputs.environment }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'eu-west-1' }}
+  TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET || 'vouch-terraform-state' }}
+  TF_LOCK_TABLE: ${{ vars.TF_LOCK_TABLE || 'vouch-terraform-locks' }}
+  TERRAGRUNT_VERSION: "0.68.4"
+
+jobs:
+  terraform:
+    name: Terraform ${{ github.event_name == 'pull_request' && 'vpc dev plan' || format('{0} {1} {2}', inputs.component, inputs.environment, inputs.action) }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Install Terragrunt
+        run: |
+          curl -L "https://github.com/gruntwork-io/terragrunt/releases/download/v${TERRAGRUNT_VERSION}/terragrunt_linux_amd64" -o /usr/local/bin/terragrunt
+          chmod +x /usr/local/bin/terragrunt
+          terragrunt --version
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Confirm AWS identity
+        run: aws sts get-caller-identity
+
+      - name: Resolve workflow inputs
+        id: resolve
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "component=vpc" >> "$GITHUB_OUTPUT"
+            echo "environment=dev" >> "$GITHUB_OUTPUT"
+            echo "action=plan" >> "$GITHUB_OUTPUT"
+            echo "working_dir=envs/dev" >> "$GITHUB_OUTPUT"
+          else
+            echo "component=${{ inputs.component }}" >> "$GITHUB_OUTPUT"
+            echo "environment=${{ inputs.environment }}" >> "$GITHUB_OUTPUT"
+            echo "action=${{ inputs.action }}" >> "$GITHUB_OUTPUT"
+            if [ "${{ inputs.component }}" = "bootstrap" ]; then
+              echo "working_dir=bootstrap/remote-state" >> "$GITHUB_OUTPUT"
+            else
+              echo "working_dir=envs/${{ inputs.environment }}" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: Guard destroy action
+        if: steps.resolve.outputs.action == 'destroy'
+        run: |
+          if [ "${{ inputs.confirm_destroy }}" != "DESTROY" ]; then
+            echo "Destroy requires confirm_destroy=DESTROY"
+            exit 1
+          fi
+
+      - name: Terraform fmt check
+        run: |
+          terraform fmt -check -recursive "${{ steps.resolve.outputs.working_dir }}"
+          if [ "${{ steps.resolve.outputs.component }}" = "vpc" ]; then
+            terraform fmt -check -recursive modules/vpc
+          fi
+
+      - name: Bootstrap init
+        if: steps.resolve.outputs.component == 'bootstrap'
+        working-directory: bootstrap/remote-state
+        run: terraform init
+
+      - name: Bootstrap validate
+        if: steps.resolve.outputs.component == 'bootstrap'
+        working-directory: bootstrap/remote-state
+        run: terraform validate
+
+      - name: Bootstrap plan
+        if: steps.resolve.outputs.component == 'bootstrap' && steps.resolve.outputs.action == 'plan'
+        working-directory: bootstrap/remote-state
+        run: |
+          terraform plan \
+            -var="aws_region=${AWS_REGION}" \
+            -var="state_bucket_name=${TF_STATE_BUCKET}" \
+            -var="lock_table_name=${TF_LOCK_TABLE}"
+
+      - name: Bootstrap apply
+        if: steps.resolve.outputs.component == 'bootstrap' && steps.resolve.outputs.action == 'apply'
+        working-directory: bootstrap/remote-state
+        run: |
+          terraform apply -auto-approve \
+            -var="aws_region=${AWS_REGION}" \
+            -var="state_bucket_name=${TF_STATE_BUCKET}" \
+            -var="lock_table_name=${TF_LOCK_TABLE}"
+
+      - name: Bootstrap destroy
+        if: steps.resolve.outputs.component == 'bootstrap' && steps.resolve.outputs.action == 'destroy'
+        working-directory: bootstrap/remote-state
+        run: |
+          terraform destroy -auto-approve \
+            -var="aws_region=${AWS_REGION}" \
+            -var="state_bucket_name=${TF_STATE_BUCKET}" \
+            -var="lock_table_name=${TF_LOCK_TABLE}"
+
+      - name: Terragrunt init
+        if: steps.resolve.outputs.component == 'vpc'
+        working-directory: ${{ steps.resolve.outputs.working_dir }}
+        run: terragrunt init -upgrade
+
+      - name: Terragrunt validate
+        if: steps.resolve.outputs.component == 'vpc'
+        working-directory: ${{ steps.resolve.outputs.working_dir }}
+        run: terragrunt validate
+
+      - name: Terragrunt plan
+        if: steps.resolve.outputs.component == 'vpc' && steps.resolve.outputs.action == 'plan'
+        working-directory: ${{ steps.resolve.outputs.working_dir }}
+        run: terragrunt plan
+
+      - name: Terragrunt apply
+        if: steps.resolve.outputs.component == 'vpc' && steps.resolve.outputs.action == 'apply'
+        working-directory: ${{ steps.resolve.outputs.working_dir }}
+        run: terragrunt apply -auto-approve
+
+      - name: Terragrunt destroy
+        if: steps.resolve.outputs.component == 'vpc' && steps.resolve.outputs.action == 'destroy'
+        working-directory: ${{ steps.resolve.outputs.working_dir }}
+        run: terragrunt destroy -auto-approve
