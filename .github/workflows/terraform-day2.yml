@@ -161,7 +161,7 @@ jobs:
       - name: Terragrunt init
         if: steps.resolve.outputs.component == 'vpc'
         working-directory: ${{ steps.resolve.outputs.working_dir }}
-        run: terragrunt init -upgrade
+        run: terragrunt init -upgrad --non-interactive
 
       - name: Terragrunt validate
         if: steps.resolve.outputs.component == 'vpc'
@@ -171,7 +171,7 @@ jobs:
       - name: Terragrunt plan
         if: steps.resolve.outputs.component == 'vpc' && steps.resolve.outputs.action == 'plan'
         working-directory: ${{ steps.resolve.outputs.working_dir }}
-        run: terragrunt plan
+        run: terragrunt plan --non-interactive
 
       - name: Terragrunt apply
         if: steps.resolve.outputs.component == 'vpc' && steps.resolve.outputs.action == 'apply'
