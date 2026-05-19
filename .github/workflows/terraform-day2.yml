@@ -10,6 +10,7 @@ on:
       - "envs/**"
       - "terragrunt.hcl"
       - ".github/workflows/terraform-day2.yml"
+
   workflow_dispatch:
     inputs:
       component:
@@ -20,6 +21,7 @@ on:
         options:
           - bootstrap
           - vpc
+
       environment:
         description: "Environment for VPC component"
         type: choice
@@ -29,6 +31,7 @@ on:
           - dev
           - staging
           - prod
+
       action:
         description: "Terraform action"
         type: choice
@@ -38,6 +41,7 @@ on:
           - plan
           - apply
           - destroy
+
       confirm_destroy:
         description: "Required only for destroy. Type DESTROY."
         required: false
@@ -56,6 +60,14 @@ env:
   TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET || 'vouch-terraform-state' }}
   TF_LOCK_TABLE: ${{ vars.TF_LOCK_TABLE || 'vouch-terraform-locks' }}
   TERRAGRUNT_VERSION: "0.68.4"
+
+  # Prevent Terraform/Terragrunt from waiting for interactive input in GitHub Actions.
+  TF_INPUT: "false"
+  TERRAGRUNT_NON_INTERACTIVE: "true"
+  TG_NON_INTERACTIVE: "true"
+
+  # Optional: opt into newer GitHub Actions runtime to avoid Node.js 20 warning.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   terraform:
@@ -99,12 +111,23 @@ jobs:
             echo "component=${{ inputs.component }}" >> "$GITHUB_OUTPUT"
             echo "environment=${{ inputs.environment }}" >> "$GITHUB_OUTPUT"
             echo "action=${{ inputs.action }}" >> "$GITHUB_OUTPUT"
+
             if [ "${{ inputs.component }}" = "bootstrap" ]; then
               echo "working_dir=bootstrap/remote-state" >> "$GITHUB_OUTPUT"
             else
               echo "working_dir=envs/${{ inputs.environment }}" >> "$GITHUB_OUTPUT"
             fi
           fi
+
+      - name: Show resolved inputs
+        run: |
+          echo "Component:    ${{ steps.resolve.outputs.component }}"
+          echo "Environment:  ${{ steps.resolve.outputs.environment }}"
+          echo "Action:       ${{ steps.resolve.outputs.action }}"
+          echo "Working dir:  ${{ steps.resolve.outputs.working_dir }}"
+          echo "AWS Region:   ${AWS_REGION}"
+          echo "State bucket: ${TF_STATE_BUCKET}"
+          echo "Lock table:   ${TF_LOCK_TABLE}"
 
       - name: Guard destroy action
         if: steps.resolve.outputs.action == 'destroy'
@@ -117,9 +140,14 @@ jobs:
       - name: Terraform fmt check
         run: |
           terraform fmt -check -recursive "${{ steps.resolve.outputs.working_dir }}"
+
           if [ "${{ steps.resolve.outputs.component }}" = "vpc" ]; then
             terraform fmt -check -recursive modules/vpc
           fi
+
+      # -----------------------------
+      # Bootstrap: S3 backend + DynamoDB lock table
+      # -----------------------------
 
       - name: Bootstrap init
         if: steps.resolve.outputs.component == 'bootstrap'
@@ -158,27 +186,31 @@ jobs:
             -var="state_bucket_name=${TF_STATE_BUCKET}" \
             -var="lock_table_name=${TF_LOCK_TABLE}"
 
+      # -----------------------------
+      # VPC: Terragrunt environment deployment
+      # -----------------------------
+
       - name: Terragrunt init
         if: steps.resolve.outputs.component == 'vpc'
         working-directory: ${{ steps.resolve.outputs.working_dir }}
-        run: terragrunt init -upgrade --non-interactive
+        run: terragrunt init -upgrade --terragrunt-non-interactive
 
       - name: Terragrunt validate
         if: steps.resolve.outputs.component == 'vpc'
         working-directory: ${{ steps.resolve.outputs.working_dir }}
-        run: terragrunt validate
+        run: terragrunt validate --terragrunt-non-interactive
 
       - name: Terragrunt plan
         if: steps.resolve.outputs.component == 'vpc' && steps.resolve.outputs.action == 'plan'
         working-directory: ${{ steps.resolve.outputs.working_dir }}
-        run: terragrunt plan --non-interactive
+        run: terragrunt plan --terragrunt-non-interactive
 
       - name: Terragrunt apply
         if: steps.resolve.outputs.component == 'vpc' && steps.resolve.outputs.action == 'apply'
         working-directory: ${{ steps.resolve.outputs.working_dir }}
-        run: terragrunt apply -auto-approve
+        run: terragrunt apply -auto-approve --terragrunt-non-interactive
 
       - name: Terragrunt destroy
         if: steps.resolve.outputs.component == 'vpc' && steps.resolve.outputs.action == 'destroy'
         working-directory: ${{ steps.resolve.outputs.working_dir }}
-        run: terragrunt destroy -auto-approve
+        run: terragrunt destroy -auto-approve --terragrunt-non-interactive
